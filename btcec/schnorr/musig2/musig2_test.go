@@ -258,7 +258,7 @@ func TestMuSigMultiParty(t *testing.T) {
 }
 
 // TestMuSigEarlyNonce tests that for protocols where nonces need to be
-// exchagned before all signers are known, the context API works as expected.
+// exchanged before all signers are known, the context API works as expected.
 func TestMuSigEarlyNonce(t *testing.T) {
 	t.Parallel()
 
@@ -365,7 +365,7 @@ func TestMuSigEarlyNonce(t *testing.T) {
 
 	msg := sha256.Sum256([]byte("let's get taprooty, LN style"))
 
-	// If we try to sign before we have the combined nonce, we shoudl get
+	// If we try to sign before we have the combined nonce, we should get
 	// an error.
 	_, err = session1.Sign(msg)
 	if !errors.Is(err, ErrCombinedNonceUnavailable) {

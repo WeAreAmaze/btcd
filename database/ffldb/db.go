@@ -249,7 +249,7 @@ func (db *db) Close() error {
 	return closeErr
 }
 
-// filesExists reports whether the named file or directory exists.
+// fileExists reports whether the named file or directory exists.
 func fileExists(name string) bool {
 	if _, err := os.Stat(name); err != nil {
 		if os.IsNotExist(err) {
@@ -325,7 +325,10 @@ func openDB(dbPath string, network wire.BitcoinNet, create bool) (database.DB, e
 	// according to the data that is actually on disk.  Also create the
 	// database cache which wraps the underlying leveldb database to provide
 	// write caching.
-	store := newBlockStore(dbPath, network)
+	store, err := newBlockStore(dbPath, network)
+	if err != nil {
+		return nil, convertErr(err.Error(), err)
+	}
 	cache := newDbCache(mdb, store, defaultCacheSize, defaultFlushSecs)
 	pdb := &db{store: store, cache: cache}
 

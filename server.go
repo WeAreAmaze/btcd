@@ -44,8 +44,8 @@ import (
 const (
 	// defaultServices describes the default services that are supported by
 	// the server.
-	defaultServices = wire.SFNodeNetwork | wire.SFNodeBloom |
-		wire.SFNodeWitness | wire.SFNodeCF
+	defaultServices = wire.SFNodeNetwork | wire.SFNodeNetworkLimited |
+		wire.SFNodeBloom | wire.SFNodeWitness | wire.SFNodeCF
 
 	// defaultRequiredServices describes the default services that are
 	// required to be supported by outbound peers.
@@ -478,7 +478,7 @@ func (sp *serverPeer) OnVersion(_ *peer.Peer, msg *wire.MsgVersion) *wire.MsgRej
 		addrManager.SetServices(remoteAddr, msg.Services)
 	}
 
-	// Ignore peers that have a protcol version that is too old.  The peer
+	// Ignore peers that have a protocol version that is too old.  The peer
 	// negotiation logic will disconnect it after this callback returns.
 	if msg.ProtocolVersion < int32(peer.MinAcceptableProtocolVersion) {
 		return nil
@@ -2204,7 +2204,7 @@ func (s *server) outboundPeerConnected(c *connmgr.ConnReq, conn net.Conn) {
 	go s.peerDoneHandler(sp)
 }
 
-// peerDoneHandler handles peer disconnects by notifiying the server that it's
+// peerDoneHandler handles peer disconnects by notifying the server that it's
 // done along with other performing other desirable cleanup.
 func (s *server) peerDoneHandler(sp *serverPeer) {
 	sp.WaitForDisconnect()
@@ -2231,7 +2231,7 @@ func (s *server) peerDoneHandler(sp *serverPeer) {
 func (s *server) peerHandler() {
 	// Start the address manager and sync manager, both of which are needed
 	// by peers.  This is done here since their lifecycle is closely tied
-	// to this handler and rather than adding more channels to sychronize
+	// to this handler and rather than adding more channels to synchronize
 	// things, it's easier and slightly faster to simply start and stop them
 	// in this handler.
 	s.addrManager.Start()
@@ -2730,6 +2730,9 @@ func newServer(listenAddrs, agentBlacklist, agentWhitelist []string,
 	if cfg.NoCFilters {
 		services &^= wire.SFNodeCF
 	}
+	if cfg.Prune != 0 {
+		services &^= wire.SFNodeNetwork
+	}
 
 	amgr := addrmgr.New(cfg.DataDir, btcdLookup)
 
@@ -2820,17 +2823,24 @@ func newServer(listenAddrs, agentBlacklist, agentWhitelist []string,
 		checkpoints = mergeCheckpoints(s.chainParams.Checkpoints, cfg.addCheckpoints)
 	}
 
+	// Log that the node is pruned.
+	if cfg.Prune != 0 {
+		btcdLog.Infof("Prune set to %d MiB", cfg.Prune)
+	}
+
 	// Create a new block chain instance with the appropriate configuration.
 	var err error
 	s.chain, err = blockchain.New(&blockchain.Config{
-		DB:           s.db,
-		Interrupt:    interrupt,
-		ChainParams:  s.chainParams,
-		Checkpoints:  checkpoints,
-		TimeSource:   s.timeSource,
-		SigCache:     s.sigCache,
-		IndexManager: indexManager,
-		HashCache:    s.hashCache,
+		DB:               s.db,
+		Interrupt:        interrupt,
+		ChainParams:      s.chainParams,
+		Checkpoints:      checkpoints,
+		TimeSource:       s.timeSource,
+		SigCache:         s.sigCache,
+		IndexManager:     indexManager,
+		HashCache:        s.hashCache,
+		Prune:            cfg.Prune * 1024 * 1024,
+		UtxoCacheMaxSize: uint64(cfg.UtxoCacheMaxSizeMiB) * 1024 * 1024,
 	})
 	if err != nil {
 		return nil, err

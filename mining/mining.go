@@ -520,7 +520,7 @@ mempoolLoop:
 			continue
 		}
 
-		// Fetch all of the utxos referenced by the this transaction.
+		// Fetch all of the utxos referenced by this transaction.
 		// NOTE: This intentionally does not fetch inputs from the
 		// mempool since a transaction which depends on other
 		// transactions in the mempool must come after those
@@ -563,9 +563,6 @@ mempoolLoop:
 				}
 				prioItem.dependsOn[*originHash] = struct{}{}
 
-				// Skip the check below. We already know the
-				// referenced transaction is available.
-				continue
 			}
 		}
 
@@ -861,7 +858,7 @@ mempoolLoop:
 	}, nil
 }
 
-// AddWitnessCommitment adds the witness commitment as an OP_RETURN outpout
+// AddWitnessCommitment adds the witness commitment as an OP_RETURN output
 // within the coinbase tx.  The raw commitment is returned.
 func AddWitnessCommitment(coinbaseTx *btcutil.Tx,
 	blockTxns []*btcutil.Tx) []byte {

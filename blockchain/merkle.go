@@ -7,6 +7,7 @@ package blockchain
 import (
 	"bytes"
 	"fmt"
+	"io"
 	"math"
 
 	"github.com/btcsuite/btcd/btcutil"
@@ -64,7 +65,10 @@ func HashMerkleBranches(left, right *chainhash.Hash) chainhash.Hash {
 	copy(hash[:chainhash.HashSize], left[:])
 	copy(hash[chainhash.HashSize:], right[:])
 
-	return chainhash.DoubleHashH(hash[:])
+	return chainhash.DoubleHashRaw(func(w io.Writer) error {
+		_, err := w.Write(hash[:])
+		return err
+	})
 }
 
 // BuildMerkleTreeStore creates a merkle tree from a slice of transactions,
@@ -142,7 +146,7 @@ func BuildMerkleTreeStore(transactions []*btcutil.Tx, witness bool) []*chainhash
 			merkles[offset] = &newHash
 
 		// The normal case sets the parent node to the double sha256
-		// of the concatentation of the left and right children.
+		// of the concatenation of the left and right children.
 		default:
 			newHash := HashMerkleBranches(merkles[i], merkles[i+1])
 			merkles[offset] = &newHash

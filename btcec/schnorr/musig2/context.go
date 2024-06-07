@@ -513,7 +513,7 @@ func (s *Session) PublicNonce() [PubNonceSize]byte {
 }
 
 // NumRegisteredNonces returns the total number of nonces that have been
-// regsitered so far.
+// registered so far.
 func (s *Session) NumRegisteredNonces() int {
 	return len(s.pubNonces)
 }
@@ -561,7 +561,7 @@ func (s *Session) Sign(msg [32]byte,
 		return nil, ErrSigningContextReuse
 
 	// We also need to make sure we have the combined nonce, otherwise this
-	// funciton was called too early.
+	// function was called too early.
 	case s.combinedNonce == nil:
 		return nil, ErrCombinedNonceUnavailable
 	}

@@ -143,7 +143,7 @@ func normalizeAddress(addr string, chain *chaincfg.Params, useWallet bool) (stri
 			if useWallet {
 				defaultPort = "38332"
 			} else {
-				defaultPort = "38332"
+				defaultPort = "38334"
 			}
 		default:
 			if useWallet {
@@ -158,7 +158,7 @@ func normalizeAddress(addr string, chain *chaincfg.Params, useWallet bool) (stri
 	return addr, nil
 }
 
-// cleanAndExpandPath expands environement variables and leading ~ in the
+// cleanAndExpandPath expands environment variables and leading ~ in the
 // passed path, cleans the result, and returns it.
 func cleanAndExpandPath(path string) string {
 	// Expand initial ~ to OS specific home directory.

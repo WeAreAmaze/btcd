@@ -59,6 +59,7 @@ var (
 	// DefaultSignetDNSSeeds is the list of seed nodes for the default
 	// (public, Taproot enabled) signet network.
 	DefaultSignetDNSSeeds = []DNSSeed{
+		{"seed.signet.bitcoin.sprovoost.nl", true},
 		{"178.128.221.177", false},
 		{"2a01:7c8:d005:390::5", false},
 		{"v7ajjeirttkbnt32wpy3c6w3emwnfr3fkla7hpxcfokr3ysd3kqtzmqd.onion:38333", false},
@@ -284,9 +285,11 @@ var MainNetParams = Params{
 		{"seed.bitcoin.sipa.be", true},
 		{"dnsseed.bluematt.me", true},
 		{"dnsseed.bitcoin.dashjr.org", false},
-		{"seed.bitcoinstats.com", true},
 		{"seed.bitnodes.io", false},
 		{"seed.bitcoin.jonasschnelli.ch", true},
+		{"seed.btc.petertodd.net", true},
+		{"seed.bitcoin.sprovoost.nl", true},
+		{"seed.bitcoin.wiz.biz", true},
 	},
 
 	// Chain parameters
@@ -340,6 +343,9 @@ var MainNetParams = Params{
 		{691719, newHashFromStr("00000000000000000008a89e854d57e5667df88f1cdef6fde2fbca1de5b639ad")},
 		{724466, newHashFromStr("000000000000000000052d314a259755ca65944e68df6b12a067ea8f1f5a7091")},
 		{751565, newHashFromStr("00000000000000000009c97098b5295f7e5f183ac811fb5d1534040adb93cabd")},
+		{781565, newHashFromStr("00000000000000000002b8c04999434c33b8e033f11a977b288f8411766ee61c")},
+		{800000, newHashFromStr("00000000000000000002a7c4c1e48d76c5a37902165a270156b7a8d72728a054")},
+		{810000, newHashFromStr("000000000000000000028028ca82b6aa81ce789e4eb9e0321b74c3cbaf405dd1")},
 	},
 
 	// Consensus rule change deployments.
@@ -540,8 +546,8 @@ var TestNet3Params = Params{
 	DefaultPort: "18333",
 	DNSSeeds: []DNSSeed{
 		{"testnet-seed.bitcoin.jonasschnelli.ch", true},
-		{"testnet-seed.bitcoin.schildbach.de", false},
-		{"seed.tbtc.petertodd.org", true},
+		{"seed.tbtc.petertodd.net", true},
+		{"seed.testnet.bitcoin.sprovoost.nl", true},
 		{"testnet-seed.bluematt.me", false},
 	},
 

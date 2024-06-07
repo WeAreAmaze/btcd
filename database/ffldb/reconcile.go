@@ -83,8 +83,6 @@ func reconcileDB(pdb *db) (database.DB, error) {
 		return nil, nil
 	}
 
-	pdb.store.scanBlockFiles(curFileNum, curOffset)
-
 	// When the write cursor position found by scanning the block files on
 	// disk is AFTER the position the metadata believes to be true, truncate
 	// the files on disk to match the metadata.  This can be a fairly common

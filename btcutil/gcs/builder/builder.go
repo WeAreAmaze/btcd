@@ -8,6 +8,7 @@ package builder
 import (
 	"crypto/rand"
 	"fmt"
+	"io"
 	"math"
 
 	"github.com/btcsuite/btcd/btcutil/gcs"
@@ -59,7 +60,7 @@ func RandomKey() ([gcs.KeySize]byte, error) {
 }
 
 // DeriveKey is a utility function that derives a key from a chainhash.Hash by
-// truncating the bytes of the hash to the appopriate key size.
+// truncating the bytes of the hash to the appropriate key size.
 func DeriveKey(keyHash *chainhash.Hash) [gcs.KeySize]byte {
 	var key [gcs.KeySize]byte
 	copy(key[:], keyHash.CloneBytes())
@@ -206,7 +207,7 @@ func (b *GCSBuilder) Build() (*gcs.Filter, error) {
 		return nil, b.err
 	}
 
-	// We'll ensure that all the parmaters we need to actually build the
+	// We'll ensure that all the parameters we need to actually build the
 	// filter properly are set.
 	if b.p == 0 {
 		return nil, fmt.Errorf("p value is not set, cannot build")
@@ -348,7 +349,10 @@ func GetFilterHash(filter *gcs.Filter) (chainhash.Hash, error) {
 		return chainhash.Hash{}, err
 	}
 
-	return chainhash.DoubleHashH(filterData), nil
+	return chainhash.DoubleHashRaw(func(w io.Writer) error {
+		_, err := w.Write(filterData)
+		return err
+	}), nil
 }
 
 // MakeHeaderForFilter makes a filter chain header for a filter, given the
@@ -367,5 +371,8 @@ func MakeHeaderForFilter(filter *gcs.Filter, prevHeader chainhash.Hash) (chainha
 
 	// The final filter hash is the double-sha256 of the hash computed
 	// above.
-	return chainhash.DoubleHashH(filterTip), nil
+	return chainhash.DoubleHashRaw(func(w io.Writer) error {
+		_, err := w.Write(filterTip)
+		return err
+	}), nil
 }

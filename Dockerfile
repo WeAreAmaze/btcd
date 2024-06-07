@@ -4,7 +4,7 @@
 #
 # docker build . -t yourregistry/btcd
 #
-# You can use the following command to buid an arm64v8 container:
+# You can use the following command to build an arm64v8 container:
 #
 # docker build . -t yourregistry/btcd --build-arg ARCH=arm64v8
 #
@@ -24,7 +24,6 @@ ARG ARCH=amd64
 FROM golang@sha256:c80567372be0d486766593cc722d3401038e2f150a0f6c5c719caa63afb4026a AS build-container
 
 ARG ARCH
-ENV GO111MODULE=on
 
 ADD . /app
 WORKDIR /app

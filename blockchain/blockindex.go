@@ -74,6 +74,9 @@ type blockNode struct {
 	// parent is the parent block for this node.
 	parent *blockNode
 
+	// ancestor is a block that is more than one block back from this node.
+	ancestor *blockNode
+
 	// hash is the double sha 256 of the block.
 	hash chainhash.Hash
 
@@ -119,6 +122,7 @@ func initBlockNode(node *blockNode, blockHeader *wire.BlockHeader, parent *block
 		node.parent = parent
 		node.height = parent.height + 1
 		node.workSum = node.workSum.Add(parent.workSum, node.workSum)
+		node.buildAncestor()
 	}
 }
 
@@ -129,6 +133,20 @@ func newBlockNode(blockHeader *wire.BlockHeader, parent *blockNode) *blockNode {
 	var node blockNode
 	initBlockNode(&node, blockHeader, parent)
 	return &node
+}
+
+// Equals compares all the fields of the block node except for the parent and
+// ancestor and returns true if they're equal.
+func (node *blockNode) Equals(other *blockNode) bool {
+	return node.hash == other.hash &&
+		node.workSum.Cmp(other.workSum) == 0 &&
+		node.height == other.height &&
+		node.version == other.version &&
+		node.bits == other.bits &&
+		node.nonce == other.nonce &&
+		node.timestamp == other.timestamp &&
+		node.merkleRoot == other.merkleRoot &&
+		node.status == other.status
 }
 
 // Header constructs a block header from the node and returns it.
@@ -150,6 +168,26 @@ func (node *blockNode) Header() wire.BlockHeader {
 	}
 }
 
+// invertLowestOne turns the lowest 1 bit in the binary representation of a number into a 0.
+func invertLowestOne(n int32) int32 {
+	return n & (n - 1)
+}
+
+// getAncestorHeight returns a suitable ancestor for the node at the given height.
+func getAncestorHeight(height int32) int32 {
+	// We pop off two 1 bits of the height.
+	// This results in a maximum of 330 steps to go back to an ancestor
+	// from height 1<<29.
+	return invertLowestOne(invertLowestOne(height))
+}
+
+// buildAncestor sets an ancestor for the given blocknode.
+func (node *blockNode) buildAncestor() {
+	if node.parent != nil {
+		node.ancestor = node.parent.Ancestor(getAncestorHeight(node.height))
+	}
+}
+
 // Ancestor returns the ancestor block node at the provided height by following
 // the chain backwards from this node.  The returned block will be nil when a
 // height is requested that is after the height of the passed node or is less
@@ -161,9 +199,22 @@ func (node *blockNode) Ancestor(height int32) *blockNode {
 		return nil
 	}
 
+	// Traverse back until we find the desired node.
 	n := node
-	for ; n != nil && n.height != height; n = n.parent {
-		// Intentionally left blank
+	for n != nil && n.height != height {
+		// If there's an ancestor available, use it. Otherwise, just
+		// follow the parent.
+		if n.ancestor != nil {
+			// Calculate the height for this ancestor and
+			// check if we can take the ancestor skip.
+			if getAncestorHeight(n.height) >= height {
+				n = n.ancestor
+				continue
+			}
+		}
+
+		// We couldn't take the ancestor skip so traverse back to the parent.
+		n = n.parent
 	}
 
 	return n
@@ -221,6 +272,28 @@ func (node *blockNode) RelativeAncestorCtx(distance int32) HeaderCtx {
 	}
 
 	return ancestor
+}
+
+// IsAncestor returns if the other node is an ancestor of this block node.
+func (node *blockNode) IsAncestor(otherNode *blockNode) bool {
+	// Return early as false if the otherNode is nil.
+	if otherNode == nil {
+		return false
+	}
+
+	ancestor := node.Ancestor(otherNode.height)
+	if ancestor == nil {
+		return false
+	}
+
+	// If the otherNode has the same height as me, then the returned
+	// ancestor will be me.  Return false since I'm not an ancestor of me.
+	if node.height == ancestor.height {
+		return false
+	}
+
+	// Return true if the fetched ancestor is other node.
+	return ancestor.Equals(otherNode)
 }
 
 // RelativeAncestor returns the ancestor block node a relative 'distance' blocks
@@ -375,6 +448,44 @@ func (bi *blockIndex) UnsetStatusFlags(node *blockNode, flags blockStatus) {
 	node.status &^= flags
 	bi.dirty[node] = struct{}{}
 	bi.Unlock()
+}
+
+// InactiveTips returns all the block nodes that aren't in the best chain.
+//
+// This function is safe for concurrent access.
+func (bi *blockIndex) InactiveTips(bestChain *chainView) []*blockNode {
+	bi.RLock()
+	defer bi.RUnlock()
+
+	// Look through the entire blockindex and look for nodes that aren't in
+	// the best chain. We're gonna keep track of all the orphans and the parents
+	// of the orphans.
+	orphans := make(map[chainhash.Hash]*blockNode)
+	orphanParent := make(map[chainhash.Hash]*blockNode)
+	for hash, node := range bi.index {
+		found := bestChain.Contains(node)
+		if !found {
+			orphans[hash] = node
+			orphanParent[node.parent.hash] = node.parent
+		}
+	}
+
+	// If an orphan isn't pointed to by another orphan, it is a chain tip.
+	//
+	// We can check this by looking for the orphan in the orphan parent map.
+	// If the orphan exists in the orphan parent map, it means that another
+	// orphan is pointing to it.
+	tips := make([]*blockNode, 0, len(orphans))
+	for hash, orphan := range orphans {
+		_, found := orphanParent[hash]
+		if !found {
+			tips = append(tips, orphan)
+		}
+
+		delete(orphanParent, hash)
+	}
+
+	return tips
 }
 
 // flushToDB writes all dirty block nodes to the database. If all writes

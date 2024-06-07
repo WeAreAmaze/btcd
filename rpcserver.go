@@ -75,6 +75,10 @@ const (
 
 	// maxProtocolVersion is the max protocol version the server supports.
 	maxProtocolVersion = 70002
+
+	// defaultMaxFeeRate is the default value to use(0.1 BTC/kvB) when the
+	// `MaxFee` field is not set when calling `testmempoolaccept`.
+	defaultMaxFeeRate = 0.1
 )
 
 var (
@@ -146,6 +150,7 @@ var rpcHandlersBeforeInit = map[string]commandHandler{
 	"getblockhash":           handleGetBlockHash,
 	"getblockheader":         handleGetBlockHeader,
 	"getblocktemplate":       handleGetBlockTemplate,
+	"getchaintips":           handleGetChainTips,
 	"getcfilter":             handleGetCFilter,
 	"getcfilterheader":       handleGetCFilterHeader,
 	"getconnectioncount":     handleGetConnectionCount,
@@ -178,6 +183,8 @@ var rpcHandlersBeforeInit = map[string]commandHandler{
 	"verifychain":            handleVerifyChain,
 	"verifymessage":          handleVerifyMessage,
 	"version":                handleVersion,
+	"testmempoolaccept":      handleTestMempoolAccept,
+	"gettxspendingprevout":   handleGetTxSpendingPrevOut,
 }
 
 // list of commands that we recognize, but for which btcd has no support because
@@ -231,7 +238,6 @@ var rpcAskWallet = map[string]struct{}{
 // Commands that are currently unimplemented, but should ultimately be.
 var rpcUnimplemented = map[string]struct{}{
 	"estimatepriority": {},
-	"getchaintips":     {},
 	"getmempoolentry":  {},
 	"getnetworkinfo":   {},
 	"getwork":          {},
@@ -266,6 +272,7 @@ var rpcLimited = map[string]struct{}{
 	"getblockcount":         {},
 	"getblockhash":          {},
 	"getblockheader":        {},
+	"getchaintips":          {},
 	"getcfilter":            {},
 	"getcfilterheader":      {},
 	"getcurrentnet":         {},
@@ -639,23 +646,6 @@ func handleDebugLevel(s *rpcServer, cmd interface{}, closeChan <-chan struct{}) 
 	return "Done.", nil
 }
 
-// witnessToHex formats the passed witness stack as a slice of hex-encoded
-// strings to be used in a JSON response.
-func witnessToHex(witness wire.TxWitness) []string {
-	// Ensure nil is returned when there are no entries versus an empty
-	// slice so it can properly be omitted as necessary.
-	if len(witness) == 0 {
-		return nil
-	}
-
-	result := make([]string, 0, len(witness))
-	for _, wit := range witness {
-		result = append(result, hex.EncodeToString(wit))
-	}
-
-	return result
-}
-
 // createVinList returns a slice of JSON objects for the inputs of the passed
 // transaction.
 func createVinList(mtx *wire.MsgTx) []btcjson.Vin {
@@ -665,7 +655,7 @@ func createVinList(mtx *wire.MsgTx) []btcjson.Vin {
 		txIn := mtx.TxIn[0]
 		vinList[0].Coinbase = hex.EncodeToString(txIn.SignatureScript)
 		vinList[0].Sequence = txIn.Sequence
-		vinList[0].Witness = witnessToHex(txIn.Witness)
+		vinList[0].Witness = txIn.Witness.ToHexStrings()
 		return vinList
 	}
 
@@ -685,7 +675,7 @@ func createVinList(mtx *wire.MsgTx) []btcjson.Vin {
 		}
 
 		if mtx.HasWitness() {
-			vinEntry.Witness = witnessToHex(txIn.Witness)
+			vinEntry.Witness = txIn.Witness.ToHexStrings()
 		}
 	}
 
@@ -839,7 +829,7 @@ func handleDecodeScript(s *rpcServer, cmd interface{}, closeChan <-chan struct{}
 
 	// Get information about the script.
 	// Ignore the error here since an error means the script couldn't parse
-	// and there is no additinal information about it anyways.
+	// and there is no additional information about it anyways.
 	scriptClass, addrs, reqSigs, _ := txscript.ExtractPkScriptAddrs(script,
 		s.cfg.ChainParams)
 	addresses := make([]string, len(addrs))
@@ -1227,7 +1217,7 @@ func handleGetBlockChainInfo(s *rpcServer, cmd interface{}, closeChan <-chan str
 		BestBlockHash: chainSnapshot.Hash.String(),
 		Difficulty:    getDifficultyRatio(chainSnapshot.Bits, params),
 		MedianTime:    chainSnapshot.MedianTime.Unix(),
-		Pruned:        false,
+		Pruned:        cfg.Prune != 0,
 		SoftForks: &btcjson.SoftForks{
 			Bip9SoftForks: make(map[string]*btcjson.Bip9SoftForkDescription),
 		},
@@ -2216,6 +2206,28 @@ func handleGetBlockTemplate(s *rpcServer, cmd interface{}, closeChan <-chan stru
 	}
 }
 
+// handleGetChainTips implements the getchaintips command.
+func handleGetChainTips(s *rpcServer, cmd interface{}, closeChan <-chan struct{}) (interface{}, error) {
+	chainTips := s.cfg.Chain.ChainTips()
+
+	ret := make([]btcjson.GetChainTipsResult, 0, len(chainTips))
+	for _, chainTip := range chainTips {
+		ret = append(ret, struct {
+			Height    int32  "json:\"height\""
+			Hash      string "json:\"hash\""
+			BranchLen int32  "json:\"branchlen\""
+			Status    string "json:\"status\""
+		}{
+			Height:    chainTip.Height,
+			Hash:      chainTip.BlockHash.String(),
+			BranchLen: chainTip.BranchLen,
+			Status:    chainTip.Status.String(),
+		})
+	}
+
+	return ret, nil
+}
+
 // handleGetCFilter implements the getcfilter command.
 func handleGetCFilter(s *rpcServer, cmd interface{}, closeChan <-chan struct{}) (interface{}, error) {
 	if s.cfg.CfIndex == nil {
@@ -3027,7 +3039,7 @@ func createVinListPrevOut(s *rpcServer, mtx *wire.MsgTx, chainParams *chaincfg.P
 		}
 
 		if len(txIn.Witness) != 0 {
-			vinEntry.Witness = witnessToHex(txIn.Witness)
+			vinEntry.Witness = txIn.Witness.ToHexStrings()
 		}
 
 		// Add the entry to the list now if it already passed the filter
@@ -3195,7 +3207,7 @@ func handleSearchRawTransactions(s *rpcServer, cmd interface{}, closeChan <-chan
 	addressTxns := make([]retrievedTx, 0, numRequested)
 	if reverse {
 		// Transactions in the mempool are not in a block header yet,
-		// so the block header field in the retieved transaction struct
+		// so the block header field in the retrieved transaction struct
 		// is left nil.
 		mpTxns, mpSkipped := fetchMempoolTxnsForAddress(s, addr,
 			uint32(numToSkip), uint32(numRequested))
@@ -3249,7 +3261,7 @@ func handleSearchRawTransactions(s *rpcServer, cmd interface{}, closeChan <-chan
 	// order and the number of results is still under the number requested.
 	if !reverse && len(addressTxns) < numRequested {
 		// Transactions in the mempool are not in a block header yet,
-		// so the block header field in the retieved transaction struct
+		// so the block header field in the retrieved transaction struct
 		// is left nil.
 		mpTxns, mpSkipped := fetchMempoolTxnsForAddress(s, addr,
 			uint32(numToSkip)-numSkipped, uint32(numRequested-
@@ -3784,6 +3796,168 @@ func handleVersion(s *rpcServer, cmd interface{}, closeChan <-chan struct{}) (in
 	return result, nil
 }
 
+// handleTestMempoolAccept implements the testmempoolaccept command.
+func handleTestMempoolAccept(s *rpcServer, cmd interface{},
+	closeChan <-chan struct{}) (interface{}, error) {
+
+	c := cmd.(*btcjson.TestMempoolAcceptCmd)
+
+	// Create txns to hold the decoded tx.
+	txns := make([]*btcutil.Tx, 0, len(c.RawTxns))
+
+	// Iterate the raw hex slice and decode them.
+	for _, rawTx := range c.RawTxns {
+		rawBytes, err := hex.DecodeString(rawTx)
+		if err != nil {
+			return nil, rpcDecodeHexError(rawTx)
+		}
+
+		tx, err := btcutil.NewTxFromBytes(rawBytes)
+		if err != nil {
+			return nil, &btcjson.RPCError{
+				Code:    btcjson.ErrRPCDeserialization,
+				Message: "TX decode failed: " + err.Error(),
+			}
+		}
+
+		txns = append(txns, tx)
+	}
+
+	results := make([]*btcjson.TestMempoolAcceptResult, 0, len(txns))
+	for _, tx := range txns {
+		// Create a test result item.
+		item := &btcjson.TestMempoolAcceptResult{
+			Txid:  tx.Hash().String(),
+			Wtxid: tx.WitnessHash().String(),
+		}
+
+		// Check the mempool acceptance.
+		result, err := s.cfg.TxMemPool.CheckMempoolAcceptance(tx)
+
+		// If an error is returned, this tx is not allow, hence we
+		// record the reason.
+		if err != nil {
+			item.Allowed = false
+
+			// TODO(yy): differentiate the errors and put package
+			// error in `PackageError` field.
+			item.RejectReason = err.Error()
+
+			results = append(results, item)
+
+			// Move to the next transaction.
+			continue
+		}
+
+		// If this transaction is an orphan, it's not allowed.
+		if result.MissingParents != nil {
+			item.Allowed = false
+
+			// NOTE: "missing-inputs" is what bitcoind returns
+			// here, so we mimic the same error message.
+			item.RejectReason = "missing-inputs"
+
+			results = append(results, item)
+
+			// Move to the next transaction.
+			continue
+		}
+
+		// Otherwise this tx is allowed if its fee rate is below the
+		// max fee rate, we now patch the fields in
+		// `TestMempoolAcceptItem` as much as possible.
+		//
+		// Calculate the fee field and validate its fee rate.
+		item.Fees, item.Allowed = validateFeeRate(
+			result.TxFee, result.TxSize, c.MaxFeeRate,
+		)
+
+		// If the fee rate check passed, assign the corresponding
+		// fields.
+		if item.Allowed {
+			item.Vsize = int32(result.TxSize)
+		} else {
+			// NOTE: "max-fee-exceeded" is what bitcoind returns
+			// here, so we mimic the same error message.
+			item.RejectReason = "max-fee-exceeded"
+		}
+
+		results = append(results, item)
+	}
+
+	return results, nil
+}
+
+// handleGetTxSpendingPrevOut implements the gettxspendingprevout command.
+func handleGetTxSpendingPrevOut(s *rpcServer, cmd interface{},
+	closeChan <-chan struct{}) (interface{}, error) {
+
+	c := cmd.(*btcjson.GetTxSpendingPrevOutCmd)
+
+	// Convert the outpoints.
+	ops := make([]wire.OutPoint, 0, len(c.Outputs))
+	for _, o := range c.Outputs {
+		hash, err := chainhash.NewHashFromStr(o.Txid)
+		if err != nil {
+			return nil, err
+		}
+
+		ops = append(ops, wire.OutPoint{
+			Hash:  *hash,
+			Index: o.Vout,
+		})
+	}
+
+	// Check mempool spend for all the outpoints.
+	results := make([]*btcjson.GetTxSpendingPrevOutResult, 0, len(ops))
+	for _, op := range ops {
+		// Create a result entry.
+		result := &btcjson.GetTxSpendingPrevOutResult{
+			Txid: op.Hash.String(),
+			Vout: op.Index,
+		}
+
+		// Check the mempool spend.
+		spendingTx := s.cfg.TxMemPool.CheckSpend(op)
+
+		// Set the spending txid if found.
+		if spendingTx != nil {
+			result.SpendingTxid = spendingTx.Hash().String()
+		}
+
+		results = append(results, result)
+	}
+
+	return results, nil
+}
+
+// validateFeeRate checks that the fee rate used by transaction doesn't exceed
+// the max fee rate specified.
+func validateFeeRate(feeSats btcutil.Amount, txSize int64,
+	maxFeeRate float64) (*btcjson.TestMempoolAcceptFees, bool) {
+
+	// Calculate fee rate in sats/kvB.
+	feeRateSatsPerKVB := feeSats * 1e3 / btcutil.Amount(txSize)
+
+	// Convert sats/vB to BTC/kvB.
+	feeRate := feeRateSatsPerKVB.ToBTC()
+
+	// Get the max fee rate, if not provided, default to 0.1 BTC/kvB.
+	if maxFeeRate == 0 {
+		maxFeeRate = defaultMaxFeeRate
+	}
+
+	// If the fee rate is above the max fee rate, this tx is not accepted.
+	if feeRate > maxFeeRate {
+		return nil, false
+	}
+
+	return &btcjson.TestMempoolAcceptFees{
+		Base:             feeSats.ToBTC(),
+		EffectiveFeeRate: feeRate,
+	}, true
+}
+
 // rpcServer provides a concurrent safe RPC server to a chain server.
 type rpcServer struct {
 	started                int32
@@ -4146,7 +4320,7 @@ func (s *rpcServer) jsonRPCRead(w http.ResponseWriter, r *http.Request, isAdmin 
 	// change the read deadline for the new connection and having one breaks
 	// long polling.  However, not having a read deadline on the initial
 	// connection would mean clients can connect and idle forever.  Thus,
-	// hijack the connecton from the HTTP server, clear the read deadline,
+	// hijack the connection from the HTTP server, clear the read deadline,
 	// and handle writing the response manually.
 	hj, ok := w.(http.Hijacker)
 	if !ok {
@@ -4169,7 +4343,7 @@ func (s *rpcServer) jsonRPCRead(w http.ResponseWriter, r *http.Request, isAdmin 
 
 	// Attempt to parse the raw body into a JSON-RPC request.
 	// Setup a close notifier.  Since the connection is hijacked,
-	// the CloseNotifer on the ResponseWriter is not available.
+	// the CloseNotifier on the ResponseWriter is not available.
 	closeChan := make(chan struct{}, 1)
 	go func() {
 		_, err = conn.Read(make([]byte, 1))
@@ -4219,7 +4393,7 @@ func (s *rpcServer) jsonRPCRead(w http.ResponseWriter, r *http.Request, isAdmin 
 			// Btcd does not respond to any request without and "id" or "id":null,
 			// regardless the indicated JSON-RPC protocol version unless RPC quirks
 			// are enabled. With RPC quirks enabled, such requests will be responded
-			// to if the reqeust does not indicate JSON-RPC version.
+			// to if the request does not indicate JSON-RPC version.
 			//
 			// RPC quirks can be enabled by the user to avoid compatibility issues
 			// with software relying on Core's behavior.
@@ -4457,10 +4631,10 @@ func genCertPair(certFile, keyFile string) error {
 	}
 
 	// Write cert and key files.
-	if err = ioutil.WriteFile(certFile, cert, 0666); err != nil {
+	if err = os.WriteFile(certFile, cert, 0666); err != nil {
 		return err
 	}
-	if err = ioutil.WriteFile(keyFile, key, 0600); err != nil {
+	if err = os.WriteFile(keyFile, key, 0600); err != nil {
 		os.Remove(certFile)
 		return err
 	}
@@ -4611,7 +4785,7 @@ type rpcserverConfig struct {
 	DB          database.DB
 
 	// TxMemPool defines the transaction memory pool to interact with.
-	TxMemPool *mempool.TxPool
+	TxMemPool mempool.TxMempool
 
 	// These fields allow the RPC server to interface with mining.
 	//

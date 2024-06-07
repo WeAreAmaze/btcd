@@ -63,11 +63,13 @@ const (
 	defaultMaxOrphanTransactions = 100
 	defaultMaxOrphanTxSize       = 100000
 	defaultSigCacheMaxSize       = 100000
+	defaultUtxoCacheMaxSizeMiB   = 250
 	sampleConfigFilename         = "sample-btcd.conf"
 	defaultTxIndex               = false
 	defaultAddrIndex             = false
 	defaultMaxBlockfiles         = 5
 	defaultGenerateSnap          = false
+	pruneMinSize                 = 1536
 )
 
 var (
@@ -101,13 +103,13 @@ type config struct {
 	AddPeers             []string      `short:"a" long:"addpeer" description:"Add a peer to connect with at startup"`
 	AddrIndex            bool          `long:"addrindex" description:"Maintain a full address-based transaction index which makes the searchrawtransactions RPC available"`
 	AgentBlacklist       []string      `long:"agentblacklist" description:"A comma separated list of user-agent substrings which will cause btcd to reject any peers whose user-agent contains any of the blacklisted substrings."`
-	AgentWhitelist       []string      `long:"agentwhitelist" description:"A comma separated list of user-agent substrings which will cause btcd to require all peers' user-agents to contain one of the whitelisted substrings. The blacklist is applied before the blacklist, and an empty whitelist will allow all agents that do not fail the blacklist."`
+	AgentWhitelist       []string      `long:"agentwhitelist" description:"A comma separated list of user-agent substrings which will cause btcd to require all peers' user-agents to contain one of the whitelisted substrings. The blacklist is applied before the whitelist, and an empty whitelist will allow all agents that do not fail the blacklist."`
 	BanDuration          time.Duration `long:"banduration" description:"How long to ban misbehaving peers.  Valid time units are {s, m, h}.  Minimum 1 second"`
 	BanThreshold         uint32        `long:"banthreshold" description:"Maximum allowed ban score before disconnecting and banning misbehaving peers."`
 	BlockMaxSize         uint32        `long:"blockmaxsize" description:"Maximum block size in bytes to be used when creating a block"`
-	BlockMinSize         uint32        `long:"blockminsize" description:"Mininum block size in bytes to be used when creating a block"`
+	BlockMinSize         uint32        `long:"blockminsize" description:"Minimum block size in bytes to be used when creating a block"`
 	BlockMaxWeight       uint32        `long:"blockmaxweight" description:"Maximum block weight to be used when creating a block"`
-	BlockMinWeight       uint32        `long:"blockminweight" description:"Mininum block weight to be used when creating a block"`
+	BlockMinWeight       uint32        `long:"blockminweight" description:"Minimum block weight to be used when creating a block"`
 	BlockPrioritySize    uint32        `long:"blockprioritysize" description:"Size in bytes for high-priority/low-fee transactions when creating a block"`
 	BlocksOnly           bool          `long:"blocksonly" description:"Do not accept transactions from remote peers."`
 	ConfigFile           string        `short:"C" long:"configfile" description:"Path to configuration file"`
@@ -148,6 +150,7 @@ type config struct {
 	Proxy                string        `long:"proxy" description:"Connect via SOCKS5 proxy (eg. 127.0.0.1:9050)"`
 	ProxyPass            string        `long:"proxypass" default-mask:"-" description:"Password for proxy server"`
 	ProxyUser            string        `long:"proxyuser" description:"Username for proxy server"`
+	Prune                uint64        `long:"prune" description:"Prune already validated blocks from the database. Must specify a target size in MiB (minimum value of 1536, default value of 0 will disable pruning)"`
 	RegressionTest       bool          `long:"regtest" description:"Use the regression test network"`
 	RejectNonStd         bool          `long:"rejectnonstd" description:"Reject non-standard transactions regardless of the default settings for the active network."`
 	RejectReplacement    bool          `long:"rejectreplacement" description:"Reject transactions that attempt to replace existing transactions within the mempool through the Replace-By-Fee (RBF) signaling policy."`
@@ -171,6 +174,7 @@ type config struct {
 	TestNet3             bool          `long:"testnet" description:"Use the test network"`
 	TorIsolation         bool          `long:"torisolation" description:"Enable Tor stream isolation by randomizing user credentials for each connection."`
 	TrickleInterval      time.Duration `long:"trickleinterval" description:"Minimum time between attempts to send new inventory to a connected peer"`
+	UtxoCacheMaxSizeMiB  uint          `long:"utxocachemaxsize" description:"The maximum size in MiB of the UTXO cache"`
 	TxIndex              bool          `long:"txindex" description:"Maintain a full hash-based transaction index which makes all transactions available via the getrawtransaction RPC"`
 	UserAgentComments    []string      `long:"uacomment" description:"Comment to add to the user agent -- See BIP 14 for more information."`
 	Upnp                 bool          `long:"upnp" description:"Use UPnP to map our listening port outside of NAT"`
@@ -276,7 +280,7 @@ func parseAndSetDebugLevels(debugLevel string) error {
 		// Validate subsystem.
 		if _, exists := subsystemLoggers[subsysID]; !exists {
 			str := "The specified subsystem [%v] is invalid -- " +
-				"supported subsytems %v"
+				"supported subsystems %v"
 			return fmt.Errorf(str, subsysID, supportedSubsystems())
 		}
 
@@ -385,7 +389,7 @@ func parseCheckpoints(checkpointStrings []string) ([]chaincfg.Checkpoint, error)
 	return checkpoints, nil
 }
 
-// filesExists reports whether the named file or directory exists.
+// fileExists reports whether the named file or directory exists.
 func fileExists(name string) bool {
 	if _, err := os.Stat(name); err != nil {
 		if os.IsNotExist(err) {
@@ -442,6 +446,7 @@ func loadConfig() (*config, []string, error) {
 		BlockPrioritySize:    mempool.DefaultBlockPrioritySize,
 		MaxOrphanTxs:         defaultMaxOrphanTransactions,
 		SigCacheMaxSize:      defaultSigCacheMaxSize,
+		UtxoCacheMaxSizeMiB:  defaultUtxoCacheMaxSizeMiB,
 		Generate:             defaultGenerate,
 		TxIndex:              defaultTxIndex,
 		AddrIndex:            defaultAddrIndex,
@@ -1142,6 +1147,30 @@ func loadConfig() (*config, []string, error) {
 		cfg.oniondial = func(a, b string, t time.Duration) (net.Conn, error) {
 			return nil, errors.New("tor has been disabled")
 		}
+	}
+
+	if cfg.Prune != 0 && cfg.Prune < pruneMinSize {
+		err := fmt.Errorf("%s: the minimum value for --prune is %d. Got %d",
+			funcName, pruneMinSize, cfg.Prune)
+		fmt.Fprintln(os.Stderr, err)
+		fmt.Fprintln(os.Stderr, usageMessage)
+		return nil, nil, err
+	}
+
+	if cfg.Prune != 0 && cfg.TxIndex {
+		err := fmt.Errorf("%s: the --prune and --txindex options may "+
+			"not be activated at the same time", funcName)
+		fmt.Fprintln(os.Stderr, err)
+		fmt.Fprintln(os.Stderr, usageMessage)
+		return nil, nil, err
+	}
+
+	if cfg.Prune != 0 && cfg.AddrIndex {
+		err := fmt.Errorf("%s: the --prune and --addrindex options may "+
+			"not be activated at the same time", funcName)
+		fmt.Fprintln(os.Stderr, err)
+		fmt.Fprintln(os.Stderr, usageMessage)
+		return nil, nil, err
 	}
 
 	// Warn about missing config file only after all other configuration is

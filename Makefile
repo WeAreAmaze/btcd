@@ -11,12 +11,12 @@ GOACC_BIN := $(GO_BIN)/go-acc
 LINT_COMMIT := v1.18.0
 GOACC_COMMIT := 80342ae2e0fcf265e99e76bcc4efd022c7c3811b
 
-DEPGET := cd /tmp && GO111MODULE=on go get -v
-GOBUILD := GO111MODULE=on go build -v
-GOINSTALL := GO111MODULE=on go install -v 
+DEPGET := cd /tmp && go get -v
+GOBUILD := go build -v
+GOINSTALL := go install -v 
 DEV_TAGS := rpctest
-GOTEST_DEV = GO111MODULE=on go test -v -tags=$(DEV_TAGS)
-GOTEST := GO111MODULE=on go test -v
+GOTEST_DEV = go test -v -tags=$(DEV_TAGS)
+GOTEST := go test -v
 
 GOFILES_NOVENDOR = $(shell find . -type f -name '*.go' -not -path "./vendor/*")
 
@@ -39,8 +39,10 @@ define print
 	echo $(GREEN)$1$(NC)
 endef
 
+#? default: Run `make build`
 default: build
 
+#? all: Run `make build` and `make check`
 all: build check
 
 # ============
@@ -55,6 +57,7 @@ $(GOACC_BIN):
 	@$(call print, "Fetching go-acc")
 	$(DEPGET) $(GOACC_PKG)@$(GOACC_COMMIT)
 
+#? goimports: Install goimports
 goimports:
 	@$(call print, "Installing goimports.")
 	$(DEPGET) $(GOIMPORTS_PKG)
@@ -63,6 +66,7 @@ goimports:
 # INSTALLATION
 # ============
 
+#? build: Build all binaries, place them in project directory
 build:
 	@$(call print, "Building all binaries")
 	$(GOBUILD) $(PKG)
@@ -71,12 +75,29 @@ build:
 	$(GOBUILD) $(PKG)/cmd/findcheckpoint
 	$(GOBUILD) $(PKG)/cmd/addblock
 
+#? install: Install all binaries, place them in $GOPATH/bin
+install:
+	@$(call print, "Installing all binaries")
+	$(GOINSTALL) $(PKG)
+	$(GOINSTALL) $(PKG)/cmd/btcctl
+	$(GOINSTALL) $(PKG)/cmd/gencerts
+	$(GOINSTALL) $(PKG)/cmd/findcheckpoint
+	$(GOINSTALL) $(PKG)/cmd/addblock
+
+#? release-install: Install btcd and btcctl release binaries, place them in $GOPATH/bin
+release-install:
+	@$(call print, "Installing btcd and btcctl release binaries")
+	env CGO_ENABLED=0 $(GOINSTALL) -trimpath -ldflags="-s -w -buildid=" $(PKG)
+	env CGO_ENABLED=0 $(GOINSTALL) -trimpath -ldflags="-s -w -buildid=" $(PKG)/cmd/btcctl
+
 # =======
 # TESTING
 # =======
 
+#? check: Run `make unit`
 check: unit
 
+#? unit: Run unit tests
 unit:
 	@$(call print, "Running unit tests.")
 	$(GOTEST_DEV) ./... -test.timeout=20m
@@ -84,6 +105,7 @@ unit:
 	cd btcutil; $(GOTEST_DEV) ./... -test.timeout=20m
 	cd btcutil/psbt; $(GOTEST_DEV) ./... -test.timeout=20m
 
+#? unit-cover: Run unit coverage tests
 unit-cover: $(GOACC_BIN)
 	@$(call print, "Running unit coverage tests.")
 	$(GOACC_BIN) ./...
@@ -96,6 +118,7 @@ unit-cover: $(GOACC_BIN)
 
 	cd btcutil/psbt; $(GOACC_BIN) ./...
 
+#? unit-race: Run unit race tests
 unit-race:
 	@$(call print, "Running unit race tests.")
 	env CGO_ENABLED=1 GORACE="history_size=7 halt_on_errors=1" $(GOTEST) -race -test.timeout=20m ./...
@@ -107,19 +130,27 @@ unit-race:
 # UTILITIES
 # =========
 
+#? fmt: Fix imports and formatting source
 fmt: goimports
 	@$(call print, "Fixing imports.")
 	goimports -w $(GOFILES_NOVENDOR)
 	@$(call print, "Formatting source.")
 	gofmt -l -w -s $(GOFILES_NOVENDOR)
 
+#? lint: Lint source
 lint: $(LINT_BIN)
 	@$(call print, "Linting source.")
 	$(LINT)
 
+#? clean: Clean source
 clean:
 	@$(call print, "Cleaning source.$(NC)")
 	$(RM) coverage.txt btcec/coverage.txt btcutil/coverage.txt btcutil/psbt/coverage.txt
+	
+#? tidy-module: Run 'go mod tidy' for all modules
+tidy-module:
+	echo "Running 'go mod tidy' for all modules"
+	scripts/tidy_modules.sh
 
 .PHONY: all \
 	default \
@@ -131,3 +162,10 @@ clean:
 	fmt \
 	lint \
 	clean
+
+#? help: Get more info on make commands
+help: Makefile
+	@echo " Choose a command run in btcd:"
+	@sed -n 's/^#?//p' $< | column -t -s ':' |  sort | sed -e 's/^/ /'
+
+.PHONY: help

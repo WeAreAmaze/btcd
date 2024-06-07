@@ -5,6 +5,7 @@
 package blockchain
 
 import (
+	"bytes"
 	"encoding/binary"
 	"fmt"
 	"math"
@@ -41,6 +42,10 @@ const (
 	// baseSubsidy is the starting subsidy amount for mined blocks.  This
 	// value is halved every SubsidyHalvingInterval blocks.
 	baseSubsidy = 50 * btcutil.SatoshiPerBitcoin
+
+	// coinbaseHeightAllocSize is the amount of bytes that the
+	// ScriptBuilder will allocate when validating the coinbase height.
+	coinbaseHeightAllocSize = 5
 )
 
 var (
@@ -238,9 +243,9 @@ func CheckTransactionSanity(tx *btcutil.Tx) error {
 			return ruleError(ErrBadTxOutValue, str)
 		}
 		if satoshi > btcutil.MaxSatoshi {
-			str := fmt.Sprintf("transaction output value of %v is "+
-				"higher than max allowed value of %v", satoshi,
-				btcutil.MaxSatoshi)
+			str := fmt.Sprintf("transaction output value is "+
+				"higher than max allowed value: %v > %v ",
+				satoshi, btcutil.MaxSatoshi)
 			return ruleError(ErrBadTxOutValue, str)
 		}
 
@@ -610,16 +615,25 @@ func ExtractCoinbaseHeight(coinbaseTx *btcutil.Tx) (int32, error) {
 		return 0, ruleError(ErrMissingCoinbaseHeight, str)
 	}
 
-	serializedHeightBytes := make([]byte, 8)
-	copy(serializedHeightBytes, sigScript[1:serializedLen+1])
-	serializedHeight := binary.LittleEndian.Uint64(serializedHeightBytes)
+	// We use 4 bytes here since it saves us allocations. We use a stack
+	// allocation rather than a heap allocation here.
+	var serializedHeightBytes [4]byte
+	copy(serializedHeightBytes[:], sigScript[1:serializedLen+1])
 
-	return int32(serializedHeight), nil
+	serializedHeight := int32(
+		binary.LittleEndian.Uint32(serializedHeightBytes[:]),
+	)
+
+	if err := compareScript(serializedHeight, sigScript); err != nil {
+		return 0, err
+	}
+
+	return serializedHeight, nil
 }
 
-// checkSerializedHeight checks if the signature script in the passed
+// CheckSerializedHeight checks if the signature script in the passed
 // transaction starts with the serialized block height of wantHeight.
-func checkSerializedHeight(coinbaseTx *btcutil.Tx, wantHeight int32) error {
+func CheckSerializedHeight(coinbaseTx *btcutil.Tx, wantHeight int32) error {
 	serializedHeight, err := ExtractCoinbaseHeight(coinbaseTx)
 	if err != nil {
 		return err
@@ -631,6 +645,26 @@ func checkSerializedHeight(coinbaseTx *btcutil.Tx, wantHeight int32) error {
 			serializedHeight, wantHeight)
 		return ruleError(ErrBadCoinbaseHeight, str)
 	}
+	return nil
+}
+
+func compareScript(height int32, script []byte) error {
+	scriptBuilder := txscript.NewScriptBuilder(
+		txscript.WithScriptAllocSize(coinbaseHeightAllocSize),
+	)
+	scriptHeight, err := scriptBuilder.AddInt64(
+		int64(height),
+	).Script()
+	if err != nil {
+		return err
+	}
+
+	if !bytes.HasPrefix(script, scriptHeight) {
+		str := fmt.Sprintf("the coinbase signature script does not "+
+			"minimally encode the height %d", height)
+		return ruleError(ErrBadCoinbaseHeight, str)
+	}
+
 	return nil
 }
 
@@ -727,7 +761,7 @@ func CheckBlockHeaderContext(header *wire.BlockHeader, prevNode HeaderCtx,
 	return nil
 }
 
-// checkBlockContext peforms several validation checks on the block which depend
+// checkBlockContext performs several validation checks on the block which depend
 // on its position within the block chain.
 //
 // The flags modify the behavior of this function as follows:
@@ -787,7 +821,7 @@ func (b *BlockChain) checkBlockContext(block *btcutil.Block, prevNode *blockNode
 			blockHeight >= b.chainParams.BIP0034Height {
 
 			coinbaseTx := block.Transactions()[0]
-			err := checkSerializedHeight(coinbaseTx, blockHeight)
+			err := CheckSerializedHeight(coinbaseTx, blockHeight)
 			if err != nil {
 				return err
 			}
@@ -845,7 +879,7 @@ func (b *BlockChain) checkBlockContext(block *btcutil.Block, prevNode *blockNode
 //
 // This function MUST be called with the chain state lock held (for reads).
 func (b *BlockChain) checkBIP0030(node *blockNode, block *btcutil.Block, view *UtxoViewpoint) error {
-	// Fetch utxos for all of the transaction ouputs in this block.
+	// Fetch utxos for all of the transaction outputs in this block.
 	// Typically, there will not be any utxos for any of the outputs.
 	fetch := make([]wire.OutPoint, 0, len(block.Transactions()))
 	for _, tx := range block.Transactions() {
@@ -855,7 +889,7 @@ func (b *BlockChain) checkBIP0030(node *blockNode, block *btcutil.Block, view *U
 			fetch = append(fetch, prevOut)
 		}
 	}
-	err := view.fetchUtxos(b.db, fetch)
+	err := view.fetchUtxos(b.utxoCache, fetch)
 	if err != nil {
 		return err
 	}
@@ -934,8 +968,8 @@ func CheckTransactionInputs(tx *btcutil.Tx, txHeight int32, utxoView *UtxoViewpo
 			return 0, ruleError(ErrBadTxOutValue, str)
 		}
 		if originTxSatoshi > btcutil.MaxSatoshi {
-			str := fmt.Sprintf("transaction output value of %v is "+
-				"higher than max allowed value of %v",
+			str := fmt.Sprintf("transaction output value is "+
+				"higher than max allowed value: %v > %v ",
 				btcutil.Amount(originTxSatoshi),
 				btcutil.MaxSatoshi)
 			return 0, ruleError(ErrBadTxOutValue, str)
@@ -1046,11 +1080,11 @@ func (b *BlockChain) checkConnectBlock(node *blockNode, block *btcutil.Block, vi
 	}
 
 	// Load all of the utxos referenced by the inputs for all transactions
-	// in the block don't already exist in the utxo view from the database.
+	// in the block don't already exist in the utxo view from the cache.
 	//
 	// These utxo entries are needed for verification of things such as
 	// transaction inputs, counting pay-to-script-hashes, and scripts.
-	err := view.fetchInputUtxos(b.db, block)
+	err := view.fetchInputUtxos(b.utxoCache, block)
 	if err != nil {
 		return err
 	}
