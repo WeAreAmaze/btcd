@@ -51,36 +51,25 @@ func deserializeWriteRow(writeRow []byte) (uint32, uint32, error) {
 	return fileNum, fileOffset, nil
 }
 
-func getLatestWriteCursor(pdb *db) (uint32, uint32, error) {
-	// Load the current write cursor position from the metadata.
-	var curFileNum, curOffset uint32
-	err := pdb.View(func(tx database.Tx) error {
-		writeRow := tx.Metadata().Get(writeLocKeyName)
-		if writeRow != nil {
-			var err1 error
-			curFileNum, curOffset, err1 = deserializeWriteRow(writeRow)
-			if err1 != nil {
-				str := "write cursor does not exist"
-				return makeDbErr(database.ErrCorruption, str, err1)
-			}
-		}
-
-		return nil
-	})
-	if err != nil {
-		return 0, 0, err
-	}
-
-	return curFileNum, curOffset, nil
-}
-
 // reconcileDB reconciles the metadata with the flat block files on disk.  It
 // will also initialize the underlying database if the create flag is set.
 func reconcileDB(pdb *db) (database.DB, error) {
 
-	curFileNum, curOffset, err := getLatestWriteCursor(pdb)
+	// Load the current write cursor position from the metadata.
+	var curFileNum, curOffset uint32
+	err := pdb.View(func(tx database.Tx) error {
+		writeRow := tx.Metadata().Get(writeLocKeyName)
+		if writeRow == nil {
+			str := "write cursor does not exist"
+			return makeDbErr(database.ErrCorruption, str, nil)
+		}
+
+		var err error
+		curFileNum, curOffset, err = deserializeWriteRow(writeRow)
+		return err
+	})
 	if err != nil {
-		return nil, nil
+		return nil, err
 	}
 
 	// When the write cursor position found by scanning the block files on

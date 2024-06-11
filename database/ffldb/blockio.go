@@ -905,6 +905,14 @@ func newBlockStore(basePath string, network wire.BitcoinNet) (*blockStore, error
 	// Look for the end of the latest block to file to determine what the
 	// write cursor position is from the viewpoing of the block files on
 	// disk.
+	_, fileNum, fileOff, err := scanBlockFiles(basePath)
+	if err != nil {
+		return nil, err
+	}
+	if fileNum == -1 {
+		fileNum = 0
+		fileOff = 0
+	}
 
 	store := &blockStore{
 		network:          network,
@@ -916,8 +924,8 @@ func newBlockStore(basePath string, network wire.BitcoinNet) (*blockStore, error
 
 		writeCursor: &writeCursor{
 			curFile:    &lockableFile{},
-			curFileNum: 0,
-			curOffset:  0,
+			curFileNum: uint32(fileNum),
+			curOffset:  fileOff,
 		},
 	}
 	store.openFileFunc = store.openFile
